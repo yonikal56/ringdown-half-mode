@@ -348,6 +348,8 @@ def make_model(
     predictive: bool = False,
     store_h_det: bool = False,
     store_h_det_mode: bool = False,
+    g_half_min: float | None = None,
+    g_half_max: float | None = None,
 ):
     """
     Arguments

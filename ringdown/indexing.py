@@ -2,6 +2,7 @@ __all__ = [
     "ModeIndex",
     "ModeIndexList",
     "GenericIndex",
+    "CustomStringIndex",
     "get_mode_label",
     "get_mode_coordinate",
 ]
@@ -55,6 +56,12 @@ class ModeIndex(ABC):
                 return GenericIndex(int(mode[0]))
             except (ValueError, TypeError):
                 pass
+
+            if isinstance(mode[0], str):
+                try:
+                    return HarmonicIndex.construct(mode[0])
+                except ValueError:
+                    return CustomStringIndex(mode[0])
         return HarmonicIndex.construct(*mode)
 
 
@@ -96,6 +103,41 @@ class GenericIndex(ModeIndex):
     @classmethod
     def construct(cls, i):
         return cls(i)
+
+@dataclass
+class CustomStringIndex(ModeIndex):
+    """Custom mode index for arbitrary string modes (e.g., 'half')."""
+    name: str
+
+    def __eq__(self, other):
+        if isinstance(other, CustomStringIndex):
+            return self.name == other.name
+        elif isinstance(other, str):
+            return self.name == other
+        return False
+
+    def __str__(self):
+        return self.name
+
+    def __repr__(self):
+        return f"CustomStringIndex(name='{self.name}')"
+
+    def __iter__(self):
+        yield self.name
+
+    @property
+    def is_prograde(self):
+        return True
+
+    def get_label(self, **kws):
+        return self.name
+
+    def get_coordinate(self):
+        return bytes(self.name, "utf-8")
+
+    @classmethod
+    def construct(cls, name):
+        return cls(name)
 
 
 @dataclass
@@ -276,7 +318,7 @@ class ModeIndexList(object):
         if self.is_generic:
             return str(self.n_modes)
         else:
-            return str([tuple(m) for m in self.indices])
+            return str(self.value)
 
     def __len__(self):
         return len(self.indices)
@@ -299,7 +341,15 @@ class ModeIndexList(object):
         if self.is_generic:
             return self.n_modes
         else:
-            return [tuple(m) for m in self.indices]
+            res = []
+            for m in self.indices:
+                if isinstance(m, CustomStringIndex):
+                    res.append(m.name)
+                elif isinstance(m, HarmonicIndex):
+                    res.append(tuple(m))
+                else:
+                    res.append(m)
+            return res
 
     @property
     def is_generic(self):
