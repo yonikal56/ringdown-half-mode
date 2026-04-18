@@ -348,8 +348,11 @@ def make_model(
     predictive: bool = False,
     store_h_det: bool = False,
     store_h_det_mode: bool = False,
+
+    # === Custom addition for half-mode Priors ===
     g_half_min: float | None = None,
     g_half_max: float | None = None,
+    # ============================================
 ):
     """
     Arguments
@@ -626,21 +629,61 @@ def make_model(
                 f = numpyro.sample("f", dist.Uniform(f_min, f_max))
                 g = numpyro.sample("g", dist.Uniform(g_min, g_max))
         elif isinstance(modes, list):
+            # === Adaptation for the half-mode ===
+            # Separate the modes so the qnms library only computes what it recognizes (Kerr tuples)
+            kerr_modes = [m for m in modes if isinstance(m, tuple)]
+
             fcoeffs = []
             gcoeffs = []
-            for mode in modes:
+            for mode in kerr_modes:
                 c = qnms.KerrMode(mode).coefficients
                 fcoeffs.append(c[0])
                 gcoeffs.append(c[1])
             fcoeffs = jnp.array(fcoeffs)
             gcoeffs = jnp.array(gcoeffs)
 
+            # Sample mass and spin once for the entire system
             m = numpyro.sample("m", dist.Uniform(m_min, m_max))
             chi = numpyro.sample("chi", dist.Uniform(chi_min, chi_max))
 
             f0 = 1 / (m * qnms.T_MSUN)
-            f_gr = f0 * chi_factors(chi, fcoeffs)
-            g_gr = f0 * chi_factors(chi, gcoeffs)
+            f_kerr = f0 * chi_factors(chi, fcoeffs) if len(fcoeffs) > 0 else jnp.array([])
+            g_kerr = f0 * chi_factors(chi, gcoeffs) if len(gcoeffs) > 0 else jnp.array([])
+
+            # Construct the full f and g arrays, including the 'half' mode
+            f_gr_list = []
+            g_gr_list = []
+            kerr_idx = 0
+
+            # Explicitly find the exact index of the 220 mode among the Kerr modes
+            target_220 = (1, -2, 2, 2, 0)
+            if target_220 in kerr_modes:
+                idx_220 = kerr_modes.index(target_220)
+                f_220 = f_kerr[idx_220]
+            else:
+                # Fallback just in case someone runs the half-mode without a 220 mode
+                f_220 = f_kerr[0] if len(f_kerr) > 0 else 1.0
+
+            for mode in modes:
+                # Identify the custom string mode
+                if isinstance(mode, str) and mode == 'half':
+                    # f_half is deterministic = 0.5 of the 220 frequency
+                    f_half = 0.5 * f_220
+                    f_gr_list.append(f_half)
+
+                    # Sample the damping parameter for the half-mode from our injected priors
+                    _g_min = g_half_min if g_half_min is not None else 10
+                    _g_max = g_half_max if g_half_max is not None else 1000
+                    g_half = numpyro.sample("g_half", dist.Uniform(_g_min, _g_max))
+                    g_gr_list.append(g_half)
+                else:
+                    # Add the standard mode
+                    f_gr_list.append(f_kerr[kerr_idx])
+                    g_gr_list.append(g_kerr[kerr_idx])
+                    kerr_idx += 1
+
+            f_gr = jnp.array(f_gr_list)
+            g_gr = jnp.array(g_gr_list)
 
             if df_min is None or df_max is None:
                 f = numpyro.deterministic("f", f_gr)
